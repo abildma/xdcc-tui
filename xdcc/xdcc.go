@@ -17,7 +17,7 @@ import (
 	irc "github.com/fluffle/goirc/client"
 )
 
-const IRCClientUserName = "xdcc-cli"
+const IRCClientUserName = "xdcc-tui"
 
 type CTCPRequest interface {
 	String() string

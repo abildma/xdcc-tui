@@ -1,57 +1,90 @@
 <!--
-  Title: xdcc-cli
-  Description: A command line tool for xdcc file search and retrival.
-  Author: ostafen
+  Title: xdcc-tui
+  Description: An interactive TUI tool for xdcc file search and retrieval.
+  Author: ostafen (original), ayeah (TUI version)
 
  <meta name="google-site-verification" content="4Rjg8YnufgHBYdLu-gAUsmJasHk03XKYhUXtRMNZdsk" />
 -->
 
-# XDCC Command Line Tools
+# XDCC TUI - Interactive XDCC Tools
 
-This project provides a simple command line tool which allow you to perform search and retrieval of files on the IRC network through the XDCC protocol. It is based on the popular [goirc](https://github.com/fluffle/goirc) library.
-
+This project provides a user-friendly terminal interface to search and download files from IRC networks through the XDCC protocol. It is based on the popular [goirc](https://github.com/fluffle/goirc) library and features a modern TUI (Terminal User Interface) for improved usability.
 
 ## Features
-- File search from multiple search engines.
-- It allows to download multiple files at the same time.
+- Interactive TUI with keyboard navigation
+- File search from multiple search engines
+- Multiple file selection and batch downloads
+- Real-time search results and download progress
+- Visual file selection with checkboxes
+- Command-line mode for scripting compatibility
 
 ## Installation
 
 Assuming you have the latest version of Go installed on your system, you can use the **make** command to build an executable:
 
 ```bash 
-git clone https://github.com/ostafen/xdcc-cli.git
-cd xdcc-cli
-make # this will ouput a bin/xdcc executable
+git clone https://github.com/your-username/xdcc-tui.git
+cd xdcc-tui
+make # this will output a bin/xdcc executable
 ```
 
 ## Usage
-To initialize a file search, simply pass a list of keywords to the **search** subcommand like so:
+
+### TUI Mode (Recommended)
+
+To start the interactive TUI mode, simply run:
+
+```bash
+foo@bar:~$ xdcc tui
+```
+
+This will launch the interactive terminal interface where you can:
+
+1. **Search for files:**
+   - Type your search keywords in the search field
+   - Press Enter to perform the search
+   - Results will appear in a scrollable list
+
+2. **Select files for download:**
+   - Use Up/Down arrows to navigate the results
+   - Press Enter to select/deselect a file (a checkmark will appear)
+   - Select multiple files for batch downloading
+
+3. **Download files:**
+   - After selecting files, press 'd' to start downloading
+   - Progress will be displayed in real-time
+
+4. **Keyboard shortcuts:**
+   - Tab: Toggle between search and results view
+   - Enter: Search (in search mode) or select file (in results mode)
+   - d: Start download for selected files
+   - q: Quit the application
+
+### Command Line Mode (Legacy)
+
+The original command-line interface is still available for scripting or non-interactive use:
+
+#### Search for files
 
 ```bash
 foo@bar:~$ xdcc search keyword1 keyword2 ...
 ```
 
-For example, to search for the latest iso of ubuntu, you could simply write:
+For example, to search for the latest ISO of Ubuntu:
 
 ```bash
 foo@bar:~$ xdcc search ubuntu iso
 ```
 
-If the command succedeeds, a table, similar to the following, will be displayed:
+This displays a table with file name, size, and URL.
 
-| File Name | File Size | URL |
-| :------: | :------: | :------: |
-| ubuntu-20.04-desktop-amd64.iso | 2.50GB | ... |
-| ... | ... | ... |
-
-A part from file details, each row will contain an **url** of the form irc://network/channel/bot/slot, which identifies the file on the IRC network. 
-To download one or more file, simply pass a list of url to the **get** subcommand like so:
+#### Download files
 
 ```bash
 foo@bar:~$ xdcc get url1 url2 ... [-o /path/to/an/output/directory]
 ```
-Alternatively, you could also specify a .txt input file, containing a list of urls (one for each line), using the **-i** switch.
+
+You can also specify a .txt input file containing a list of URLs (one per line) using the **-i** switch.
 
 ## Notes
 

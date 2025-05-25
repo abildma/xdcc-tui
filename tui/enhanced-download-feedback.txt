@@ -1,0 +1,43 @@
+// Enhanced download feedback code to add to downloadFile function
+
+// In downloadFile function:
+return func() tea.Msg {
+    // Create detailed status message with connection information
+    detailedStatus := fmt.Sprintf("Connecting to %s, requesting file #%d from %s in channel %s...", 
+        url.Network, url.Slot, url.UserName, url.Channel)
+    
+    // Set up a transfer with error handling
+    transfer := xdcc.NewTransfer(xdcc.Config{
+        File:    *url,
+        OutPath: outputPath,
+        SSLOnly: false,
+    })
+    
+    // Start the transfer with enhanced error capture
+    err := transfer.Start()
+    if err != nil {
+        // Provide more detailed error messages
+        errorMsg := err.Error()
+        
+        // Check for common IRC bot rejection messages
+        if strings.Contains(strings.ToLower(errorMsg), "queue") {
+            return errorMsg{err: fmt.Errorf("Bot queue full: %s", errorMsg), url: url}
+        } else if strings.Contains(strings.ToLower(errorMsg), "slot") {
+            return errorMsg{err: fmt.Errorf("No slots available: %s", errorMsg), url: url}
+        } else if strings.Contains(strings.ToLower(errorMsg), "limit") {
+            return errorMsg{err: fmt.Errorf("Download limit reached: %s", errorMsg), url: url}
+        } else if strings.Contains(strings.ToLower(errorMsg), "banned") || 
+                 strings.Contains(strings.ToLower(errorMsg), "denied") {
+            return errorMsg{err: fmt.Errorf("Access denied by bot: %s", errorMsg), url: url}
+        }
+        
+        return errorMsg{err: err, url: url}
+    }
+    
+    // Set up event monitoring and return initial status
+    evtChannel := transfer.PollEvents()
+    return downloadStartMsg{
+        status: detailedStatus,
+        evtChannel: evtChannel,
+    }
+}

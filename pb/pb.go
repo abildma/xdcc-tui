@@ -2,7 +2,7 @@ package pb
 
 import (
 	"time"
-	"xdcc-cli/util"
+	"xdcc-tui/util"
 
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"

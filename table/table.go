@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"xdcc-cli/util"
+	"xdcc-tui/util"
 )
 
 type Row []string

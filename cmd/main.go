@@ -10,13 +10,23 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"xdcc-cli/pb"
-	"xdcc-cli/search"
-	table "xdcc-cli/table"
-	xdcc "xdcc-cli/xdcc"
+	"xdcc-tui/pb"
+	"xdcc-tui/search"
+	table "xdcc-tui/table"
+	xdcc "xdcc-tui/xdcc"
+	tui "xdcc-tui/tui"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 var searchEngine *search.ProviderAggregator
+
+func execTUI() {
+	m := tui.NewModel()
+	if err := tea.NewProgram(m).Start(); err != nil {
+		fmt.Printf("Error running program: %v\n", err)
+		os.Exit(1)
+	}
+}
 
 func init() {
 	searchEngine = search.NewProviderAggregator(
@@ -209,18 +219,22 @@ func execGet(args []string) {
 }
 
 func main() {
+	// If no arguments provided, start in TUI mode by default
 	if len(os.Args) < 2 {
-		fmt.Println("one of the following subcommands is expected: [search, get]")
-		os.Exit(1)
+		execTUI()
+		return
 	}
 
+	// If arguments are provided, process them as before
 	switch os.Args[1] {
 	case "search":
 		execSearch(os.Args[2:])
 	case "get":
 		execGet(os.Args[2:])
+	case "tui":
+		execTUI()
 	default:
-		fmt.Println("no such command: ", os.Args[1])
-		os.Exit(1)
+		// If unrecognized command, assume user wants TUI mode with the arguments as search terms
+		execTUI()
 	}
 }
