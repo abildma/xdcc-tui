@@ -5,49 +5,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
-
-	"xdcc-tui/search"
-	"xdcc-tui/xdcc"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"xdcc-tui/xdcc"
+	"xdcc-tui/search"
 )
 
-// Define styles
-var (
-	titleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#FAFAFA")).
-			Background(lipgloss.Color("#7D56F4")).
-			PaddingLeft(2).
-			PaddingRight(2)
-
-	headerStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#FAFAFA")).
-			Background(lipgloss.Color("#7D56F4")).
-			PaddingLeft(2).
-			PaddingRight(2).
-			MarginBottom(1)
-
-	highlightStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#7D56F4")).
-			Bold(true)
-
-	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#F25D94")).
-			Bold(true)
-
-	successStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#43BF6D")).
-			Bold(true)
-)
-
-// Define modes
+// Mode represents the current mode of the TUI
 type Mode int
 
 const (
@@ -67,14 +35,15 @@ type FileItem struct {
 
 // List item interface implementations
 func (i FileItem) Title() string {
-	if i.selected {
-		return highlightStyle.Render("[✓] " + i.name)
+	sizeStr := ""
+	if i.size > 0 {
+		sizeStr = fmt.Sprintf("(%d KB)", i.size/1024)
 	}
-	return i.name
+	return fmt.Sprintf("%s %s", i.name, sizeStr)
 }
 
 func (i FileItem) Description() string {
-	return fmt.Sprintf("Size: %s | %s", FormatSize(i.size), i.url.String())
+	return i.url.String()
 }
 
 func (i FileItem) FilterValue() string {
@@ -83,9 +52,9 @@ func (i FileItem) FilterValue() string {
 
 // Helper to find a file item by URL
 func findFileItemByURL(items []FileItem, url *xdcc.IRCFile) *FileItem {
-	for _, item := range items {
+	for i, item := range items {
 		if item.url.String() == url.String() {
-			return &item
+			return &items[i]
 		}
 	}
 	return nil
@@ -108,10 +77,6 @@ type downloadProgressMsg struct {
 	speed           float64
 }
 
-type downloadStartedMsg struct {
-	file string
-}
-
 type downloadFinishedMsg struct {
 	url *xdcc.IRCFile
 }
@@ -131,7 +96,8 @@ type Model struct {
 	searchEngine    *search.ProviderAggregator
 	error           string
 	status          string
-	selectedFiles   map[int]bool
+	// Change to map[string]bool to use URL strings as keys for more reliable tracking
+	selectedFiles   map[string]bool
 	downloadQueue   []*xdcc.IRCFile
 	queueCursor     int
 	downloadPaused  bool
@@ -143,18 +109,20 @@ type Model struct {
 
 // NewModel creates a new model
 func NewModel() Model {
-	// Setup search input
+	// Set up text input for search
 	ti := textinput.New()
-	ti.Placeholder = "Enter search keywords"
+	ti.Placeholder = "Enter search terms"
 	ti.Focus()
-	ti.CharLimit = 50
+	ti.CharLimit = 156
+	ti.Width = 60
 
-	// Setup filter input
+	// Set up text input for filter
 	fi := textinput.New()
 	fi.Placeholder = "Filter results"
-	fi.CharLimit = 50
+	fi.CharLimit = 156
+	fi.Width = 60
 
-	// Setup spinner
+	// Set up spinner
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4"))
@@ -168,13 +136,15 @@ func NewModel() Model {
 		spinner:       s,
 		progress:      p,
 		mode:          ModeSearch,
-		selectedFiles: make(map[int]bool),
+		// Use string map instead of int map for more reliable tracking
+		selectedFiles: make(map[string]bool),
 		itemsPerPage:  15,
 		page:          0,
-		searchEngine: search.NewProviderAggregator(
+		searchEngine:  search.NewProviderAggregator(
 			&search.XdccEuProvider{},
-			&search.SunXdccProvider{},
+			&search.XdccServProvider{},
 		),
+		status: "Enter search terms",
 	}
 }
 
@@ -198,14 +168,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == ModeSearch {
 			// Handle special keys first
 			switch msg.String() {
-			case "ctrl+c", "q":
-				return m, tea.Quit
-			case "esc":
-				// Exit search mode if there are results
+			case "ctrl+c", "esc":
+				// If we have results, exit to results mode, otherwise quit
 				if len(m.searchResults) > 0 {
 					m.mode = ModeResults
 					m.searchInput.Blur()
+					m.status = "Switched to results mode"
 					return m, nil
+				} else {
+					// No results, so just quit
+					return m, tea.Quit
 				}
 			case "tab":
 				// Switch to results mode if we have results
@@ -257,10 +229,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.mode == ModeFilter {
 			// Handle special keys first
 			switch msg.String() {
-			case "ctrl+c", "q":
-				return m, tea.Quit
-			case "esc":
-				// Exit filter mode
+			case "ctrl+c", "esc":
+				// Exit filter mode to results mode
 				m.mode = ModeResults
 				m.filterInput.Blur()
 				m.status = "Filter mode exited"
@@ -300,56 +270,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// For other modes, handle keys normally
 		switch msg.String() {
-		case "ctrl+c":
+		case "ctrl+c", "esc", "q":
 			return m, tea.Quit
-		case "esc":
-			// Quit if in results mode, otherwise go back to results if available
-			if m.mode == ModeResults {
-				return m, tea.Quit
-			} else if m.mode == ModeDownloading {
-				m.mode = ModeResults
-				m.status = "Returned to results view"
-				return m, nil
-			}
 
 		case "enter":
-			if m.mode == ModeSearch {
-				// Submit search
-				m.status = "Searching for " + m.searchInput.Value() + "..."
-				return m, func() tea.Msg {
-					// Split search query into keywords
-					keywords := strings.Fields(m.searchInput.Value())
-					results, err := m.searchEngine.Search(keywords)
-					if err != nil {
-						return errorMsg{err: err}
-					}
-
-					// Convert to FileItems
-					fileItems := []FileItem{}
-					for _, r := range results {
-						fileItems = append(fileItems, FileItem{
-							name:     r.Name,
-							size:     r.Size,
-							url:      &r.URL,
-							selected: false,
-						})
-					}
-
-					// Switch to results mode if we found something
-					if len(fileItems) > 0 {
-						m.mode = ModeResults
-						m.searchInput.Blur()
-					}
-
-					return searchResultMsg{results: fileItems}
-				}
-			} else if m.mode == ModeResults {
+			if m.mode == ModeResults {
 				// Start download of ONLY explicitly selected files
 				var selectedItems []FileItem
-
-				// ONLY look for files with the selected flag set to true
-				for _, item := range m.filteredResults {
-					if item.selected {
+				
+				// Look for files marked as selected in our central tracking map
+				fmt.Printf("DEBUG: Checking for selected files among %d filtered results\n", len(m.filteredResults))
+				
+				// First, directly check which files are in our selection map
+				fmt.Printf("DEBUG: Selected files in tracking map:\n")
+				for urlStr, selected := range m.selectedFiles {
+					if selected {
+						fmt.Printf("DEBUG: URL %s is selected in the map\n", urlStr)
+					}
+				}
+				
+				// Now check the items and ensure they match our selection map
+				for i, item := range m.filteredResults {
+					urlStr := item.url.String()
+					
+					// Extra debug output to help diagnose selection issues
+					if i < 10 { // Limit output to first 10 items to avoid flooding
+						fmt.Printf("DEBUG: File #%d: '%s' selection status: item=%v, map=%v\n", 
+							i, item.name, item.selected, m.selectedFiles[urlStr])
+					}
+					
+					// Use the map for source of truth, but also check the item
+					if m.selectedFiles[urlStr] || item.selected {
+						// Make sure both are in sync
+						if !item.selected {
+							fmt.Printf("DEBUG: Fixing selection inconsistency for %s\n", item.name)
+							item.selected = true
+						}
+						if !m.selectedFiles[urlStr] {
+							m.selectedFiles[urlStr] = true
+						}
+						
 						selectedItems = append(selectedItems, item)
 						fmt.Printf("Found selected file: %s\n", item.name)
 					}
@@ -383,38 +343,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "space":
 			// Toggle selection of current item
 			if m.mode == ModeResults {
-				fmt.Printf("DEBUG: Space pressed in results mode, cursor at %d\n", m.cursor)
 				// Get current page items and cursor position
 				startIdx := m.page * m.itemsPerPage
 				endIdx := startIdx + m.itemsPerPage
 				if endIdx > len(m.filteredResults) {
 					endIdx = len(m.filteredResults)
 				}
-
-				// Fixed cursor bounds check - always work with relative cursor position
+				
+				// Calculate actual index in the full results array
 				actualIdx := startIdx + m.cursor
-				if actualIdx < len(m.filteredResults) {
-					// Initialize map if needed
-					if m.selectedFiles == nil {
-						m.selectedFiles = make(map[int]bool)
-					}
-
-					// DEBUG information
-					fmt.Printf("DEBUG: Toggling selection for item at index %d (page %d, cursor %d)\n", actualIdx, m.page, m.cursor)
-
-					// CRITICAL FIX: Toggle the selected flag directly on the item
-					m.filteredResults[actualIdx].selected = !m.filteredResults[actualIdx].selected
-
-					// Also store in map with correct index (actualIdx, not cursor)
-					m.selectedFiles[actualIdx] = m.filteredResults[actualIdx].selected
-
-					// Use the actual item's selected state for status message
-					if m.filteredResults[actualIdx].selected {
-						m.status = fmt.Sprintf("Selected: %s", m.filteredResults[actualIdx].name)
+				fmt.Printf("DEBUG: Space pressed at cursor: %d, actual index: %d\n", m.cursor, actualIdx)
+				
+				// Make sure we're within bounds of the results
+				if actualIdx >= 0 && actualIdx < len(m.filteredResults) {
+					// Get the current item directly
+					item := &m.filteredResults[actualIdx]
+					urlStr := item.url.String()
+					
+					// Toggle the selection flag
+					item.selected = !item.selected
+					
+					// Also update the central selectedFiles map to keep them in sync
+					if item.selected {
+						m.selectedFiles[urlStr] = true
 					} else {
-						m.status = fmt.Sprintf("Unselected: %s", m.filteredResults[actualIdx].name)
+						delete(m.selectedFiles, urlStr)
 					}
+					
+					fmt.Printf("DEBUG: Toggled selection for '%s' to: %v\n", item.name, item.selected)
+					
+					// Update status message with selection state
+					if item.selected {
+						m.status = fmt.Sprintf("Selected: %s", item.name)
+					} else {
+						m.status = fmt.Sprintf("Unselected: %s", item.name)
 					}
+				} else {
+					// Log error if we're out of bounds
+					fmt.Printf("ERROR: Invalid index %d for selection, results length: %d\n", actualIdx, len(m.filteredResults))
+					m.status = "Error: Could not select item, invalid position"
 				}
 			}
 
@@ -513,23 +480,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "f":
-			// Filter mode
+			// Filter mode - only enter filter mode if we're in results mode
 			if m.mode == ModeResults {
 				m.mode = ModeFilter
 				m.filterInput.Focus()
 				m.searchInput.Blur()
 				m.status = "Enter filter terms"
-			}
-
-		case "esc":
-			// Exit filter mode or go back to results
-			if m.mode == ModeFilter {
-				m.mode = ModeResults
-				m.filterInput.Blur()
-				m.status = "Filter mode exited"
-			} else if m.mode == ModeDownloading {
-				m.mode = ModeResults
-				m.status = "Returned to results view"
 			}
 
 		case "tab":
@@ -553,13 +509,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		default:
-			// Handle text input based on current mode
+			// Any other key press
 			if m.mode == ModeSearch {
-				var cmd tea.Cmd
 				m.searchInput, cmd = m.searchInput.Update(msg)
 				return m, cmd
 			} else if m.mode == ModeFilter {
-				var cmd tea.Cmd
 				m.filterInput, cmd = m.filterInput.Update(msg)
 
 				// Apply filter as you type
@@ -574,11 +528,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.filteredResults = append(m.filteredResults, item)
 						}
 					}
-					m.status = fmt.Sprintf("Found %d results containing '%s'", len(m.filteredResults), filterText)
+					m.status = fmt.Sprintf("Found %d matching results", len(m.filteredResults))
 				}
 
-				// Reset page to 0
+				// Reset page and cursor
 				m.page = 0
+				m.cursor = 0
 
 				return m, cmd
 			}
@@ -593,96 +548,103 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "No results found"
 		}
-
-	case downloadProgressMsg:
-		// Update progress information
-		m.downloadedSize = msg.bytesDownloaded
-		m.totalSize = msg.totalBytes
-
-		if m.currentFile == "" {
-			// Try to get the filename from the search results for better display
-			fileItem := findFileItemByURL(m.searchResults, msg.url)
-			if fileItem != nil {
-				m.currentFile = fileItem.name
-			} else {
-				// Fallback to URL string if the file item is not found
-				m.currentFile = msg.url.String()
-			}
-		}
-
-		// Calculate progress percentage and update status
-		progressPercent := float64(m.downloadedSize) / float64(m.totalSize)
-		m.progress.SetPercent(progressPercent)
-
-		// Update status with speed information
-		m.status = fmt.Sprintf("Downloading %s: %s / %s (%.2f MB/s)",
-			m.currentFile,
-			FormatSize(m.downloadedSize),
-			FormatSize(m.totalSize),
-			msg.speed/1024/1024)
-
-		// Continue monitoring download
-		return m, func() tea.Msg {
-			time.Sleep(500 * time.Millisecond)
-			return msg
-		}
-
-	case downloadFinishedMsg:
-		// Download completed successfully
-		fileItem := findFileItemByURL(m.searchResults, msg.url)
-		if fileItem != nil {
-			m.status = successStyle.Render(fmt.Sprintf("✓ Download of %s completed successfully!", fileItem.name))
-		} else {
-			m.status = successStyle.Render(fmt.Sprintf("✓ Download completed successfully!"))
-		}
-
-		// Reset download state
-		m.downloadedSize = 0
-		m.totalSize = 0
-		m.currentFile = ""
-		m.progress.SetPercent(0)
-
-		// Remove the completed download from the queue
-		if len(m.downloadQueue) > 0 {
-			m.downloadQueue = m.downloadQueue[1:]
-		}
-
-		// Start the next download if there are more in the queue
-		if len(m.downloadQueue) > 0 {
-			outputPath := filepath.Join("downloads", filepath.Base(m.downloadQueue[0].String()))
-			return m, downloadFile(m.downloadQueue[0], outputPath)
-		}
+		m.page = 0
+		m.cursor = 0
+		return m, nil
 
 	case errorMsg:
-		// Handle download errors
-		if msg.err != nil {
-			m.error = errorStyle.Render("Error: " + msg.err.Error())
-			m.lastDownloadURL = msg.url
-
-			// Reset download state
-			m.downloadedSize = 0
-			m.totalSize = 0
-			m.currentFile = ""
-			m.progress.SetPercent(0)
-
-			// Remove the failed download from the queue
-			if len(m.downloadQueue) > 0 {
-				m.downloadQueue = m.downloadQueue[1:]
+		// Handle errors
+		m.error = msg.err.Error()
+		if msg.url != nil {
+			// Error during download, remove from queue and try next
+			for i, url := range m.downloadQueue {
+				if url.String() == msg.url.String() {
+					m.downloadQueue = append(m.downloadQueue[:i], m.downloadQueue[i+1:]...)
+					break
+				}
 			}
 
-			// Start the next download if there are more in the queue
+			// Start next download if available
 			if len(m.downloadQueue) > 0 {
 				outputPath := filepath.Join("downloads", filepath.Base(m.downloadQueue[0].String()))
-				return m, downloadFile(m.downloadQueue[0], outputPath)
+				cmds = append(cmds, downloadFile(m.downloadQueue[0], outputPath))
+				return m, tea.Batch(cmds...)
+			}
+		}
+		m.status = "Error: " + m.error
+		return m, nil
+
+	case downloadProgressMsg:
+		// Update download progress
+		m.downloadedSize = msg.bytesDownloaded
+		m.totalSize = msg.totalBytes
+		m.lastDownloadURL = msg.url
+
+		// Create status message
+		fileItem := findFileItemByURL(m.searchResults, msg.url)
+		if fileItem != nil {
+			m.currentFile = fileItem.name
+		} else {
+			m.currentFile = msg.url.String()
+		}
+
+		// Update status
+		if msg.totalBytes > 0 {
+			percent := float64(msg.bytesDownloaded) / float64(msg.totalBytes) * 100
+			m.status = fmt.Sprintf("Downloading %s: %.1f%% (%.1f KB/s)", 
+				m.currentFile, 
+				percent,
+				float64(msg.speed)/1024)
+		} else {
+			m.status = fmt.Sprintf("Downloading %s: %d KB (%.1f KB/s)", 
+				m.currentFile, 
+				msg.bytesDownloaded/1024,
+				float64(msg.speed)/1024)
+		}
+
+		return m, nil
+
+	case downloadFinishedMsg:
+		// Handle finished download
+		// Remove from queue
+		for i, url := range m.downloadQueue {
+			if url.String() == msg.url.String() {
+				m.downloadQueue = append(m.downloadQueue[:i], m.downloadQueue[i+1:]...)
+				break
 			}
 		}
 
-	case tea.WindowSizeMsg:
-		// Handle window resize
+		// Reset download stats
+		m.downloadedSize = 0
+		m.totalSize = 0
+
+		// Get filename for status
+		fileName := msg.url.String()
+		fileItem := findFileItemByURL(m.searchResults, msg.url)
+		if fileItem != nil {
+			fileName = fileItem.name
+		}
+
+		// Update status
+		m.status = fmt.Sprintf("Download completed: %s", fileName)
+
+		// Start next download if available
+		if len(m.downloadQueue) > 0 {
+			outputPath := filepath.Join("downloads", filepath.Base(m.downloadQueue[0].String()))
+			cmds = append(cmds, downloadFile(m.downloadQueue[0], outputPath))
+			return m, tea.Batch(cmds...)
+		}
+
 		return m, nil
+
+	case spinner.TickMsg:
+		// Update spinner
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	}
 
-	return m, cmd
+	// Return updated model
+	return m, nil
 }
 
 // View renders the UI
@@ -690,136 +652,165 @@ func (m Model) View() string {
 	var s strings.Builder
 
 	// Header
-	s.WriteString(headerStyle.Render("✨ XDCC-TUI - Interactive XDCC Downloader ✨"))
-	s.WriteString("\n\n")
+	s.WriteString("💾 XDCC-TUI - Interactive XDCC Downloader 💾\n\n")
 
-	// Render based on the current mode
+	// Mode display
 	switch m.mode {
 	case ModeSearch:
-		s.WriteString(titleStyle.Render("Search Mode"))
-		s.WriteString("\n\n")
-		s.WriteString("Enter search terms: ")
-		s.WriteString(m.searchInput.View())
-		s.WriteString("\n\n")
-		s.WriteString("Press Enter to search")
-
-	case ModeFilter:
-		s.WriteString(titleStyle.Render("Filter Mode"))
-		s.WriteString("\n\n")
-		s.WriteString("Filter results: ")
-		s.WriteString(m.filterInput.View())
-		s.WriteString("\n\n")
-		s.WriteString("Press Esc to exit filter mode")
+		s.WriteString("📡 Search Mode 📡\n\n")
+		s.WriteString(fmt.Sprintf("Enter search terms: %s\n", m.searchInput.View()))
+		if m.status != "" {
+			s.WriteString("\n" + m.status + "\n")
+		}
+		if m.error != "" {
+			s.WriteString("\nError: " + m.error + "\n")
+		}
+		if len(m.searchResults) > 0 {
+			s.WriteString(fmt.Sprintf("\nFound %d results\n", len(m.searchResults)))
+		}
+		s.WriteString("\ns: Search | tab: Switch Mode | esc: Quit\n")
 
 	case ModeResults:
-		s.WriteString(titleStyle.Render("Results Mode"))
-		s.WriteString("\n\n")
+		s.WriteString("📄 Results Mode 📄\n\n")
 
-		// Get current page items
+		// Current page info
+		totalPages := (len(m.filteredResults) - 1) / m.itemsPerPage + 1
+		s.WriteString(fmt.Sprintf("Page %d of %d (Total: %d files)\n\n", m.page+1, totalPages, len(m.filteredResults)))
+
+		// Display current page items
 		startIdx := m.page * m.itemsPerPage
 		endIdx := startIdx + m.itemsPerPage
 		if endIdx > len(m.filteredResults) {
 			endIdx = len(m.filteredResults)
 		}
 
-		// Display pagination info
-		totalPages := (len(m.filteredResults)-1)/m.itemsPerPage + 1
-		s.WriteString(fmt.Sprintf("Page %d of %d (Total: %d files)\n\n",
-			m.page+1, totalPages, len(m.filteredResults)))
+		// No results to display
+		if len(m.filteredResults) == 0 {
+			s.WriteString("No results to display\n")
+		} else {
+			// Display items
+			for i := startIdx; i < endIdx; i++ {
+				item := m.filteredResults[i]
 
-		// Display results with cursor
-		for i := startIdx; i < endIdx; i++ {
-			item := m.filteredResults[i]
-			cursorIdx := i - startIdx
+				// Selected cursor
+				cursor := " "
+				if i-startIdx == m.cursor {
+					cursor = ">"
+				}
 
-			// Highlight selected items
-			var fileDisplay string
-			if item.selected {
-				fileDisplay = highlightStyle.Render("[✓] " + item.name)
-			} else {
-				fileDisplay = item.name
+				// Selected for download - check both the item itself and our selection map
+				selected := " "
+				// Also check our central tracking map using URL as the key
+				urlStr := item.url.String()
+				
+				// Use either the item.selected flag or the map value (prefer the map)
+				if m.selectedFiles[urlStr] {
+					// Set this just to make sure both stay in sync
+					item.selected = true
+					selected = "✓"
+					fmt.Printf("DEBUG VIEW: Item %d ('%s') is SELECTED\n", i, item.name)
+				} else if item.selected {
+					// If it's selected in the item but not the map, sync them
+					selected = "✓"
+					m.selectedFiles[urlStr] = true
+					fmt.Printf("DEBUG VIEW: Found selected item not in map: %s\n", item.name)
+				}
+
+				// File info
+				s.WriteString(fmt.Sprintf("%s [%s] %s (%d KB)\n", 
+					cursor, selected, item.name, item.size/1024))
 			}
-
-			// Add cursor and format line
-			if cursorIdx == m.cursor {
-				s.WriteString(highlightStyle.Render("> " + fileDisplay))
-			} else {
-				s.WriteString("  " + fileDisplay)
-			}
-
-			// Add file size
-			s.WriteString(fmt.Sprintf(" (%s)\n", FormatSize(item.size)))
 		}
+
+		// Status message
+		if m.status != "" {
+			s.WriteString("\n" + m.status + "\n")
+		}
+
+		// Help text
+		s.WriteString("\nSpace: Select | Enter: Download | j/k: Move | h/l: Pages | f: Filter | esc: Quit\n")
+
+	case ModeFilter:
+		s.WriteString("🔍 Filter Mode 🔍\n\n")
+		s.WriteString(fmt.Sprintf("Filter terms: %s\n", m.filterInput.View()))
+		if m.status != "" {
+			s.WriteString("\n" + m.status + "\n")
+		}
+
+		// Show preview of filtered results
+		if len(m.filteredResults) > 0 {
+			s.WriteString(fmt.Sprintf("\nFound %d matching files\n", len(m.filteredResults)))
+			// Show a few examples
+			count := 3
+			if len(m.filteredResults) < count {
+				count = len(m.filteredResults)
+			}
+			for i := 0; i < count; i++ {
+				s.WriteString(fmt.Sprintf("- %s\n", m.filteredResults[i].name))
+			}
+			if len(m.filteredResults) > count {
+				s.WriteString("...\n")
+			}
+		} else {
+			s.WriteString("\nNo files match the filter\n")
+		}
+
+		s.WriteString("\nEnter: Apply filter | esc: Cancel\n")
 
 	case ModeDownloading:
-		s.WriteString(titleStyle.Render("Download Queue"))
-		s.WriteString("\n\n")
+		s.WriteString("⬇️  Downloading Mode ⬇️\n\n")
 
-		// Show progress if downloading
-		if m.downloadedSize > 0 && m.totalSize > 0 {
+		// Current download info
+		if m.downloadedSize > 0 {
+			// Progress bar
+			percent := 0.0
+			if m.totalSize > 0 {
+				percent = float64(m.downloadedSize) / float64(m.totalSize)
+			}
+			progressBar := m.progress.ViewAs(percent)
+			
 			s.WriteString(fmt.Sprintf("Downloading: %s\n", m.currentFile))
-			s.WriteString(fmt.Sprintf("%s / %s\n",
-				FormatSize(m.downloadedSize),
-				FormatSize(m.totalSize)))
-			s.WriteString(m.progress.View())
-			s.WriteString("\n\n")
+			s.WriteString(progressBar + "\n")
+			s.WriteString(fmt.Sprintf("%d KB / %d KB (%.1f%%)\n\n", 
+				m.downloadedSize/1024, 
+				m.totalSize/1024,
+				percent * 100))
+		} else if len(m.downloadQueue) > 0 {
+			s.WriteString(fmt.Sprintf("Preparing to download %d files...\n", len(m.downloadQueue)))
+			s.WriteString(m.spinner.View() + "\n\n")
+		} else {
+			s.WriteString("No active downloads\n\n")
 		}
 
-		// Display queue with cursor
+		// Download queue
+		s.WriteString(fmt.Sprintf("Download Queue (%d):\n", len(m.downloadQueue)))
 		if len(m.downloadQueue) == 0 {
-			s.WriteString("Download queue is empty\n")
+			s.WriteString("Queue is empty\n")
 		} else {
-			s.WriteString(fmt.Sprintf("Files in queue: %d\n\n", len(m.downloadQueue)))
-
 			for i, url := range m.downloadQueue {
-				// Get readable filename for display
-				fileName := "unknown file"
-				fileSize := "unknown size"
+				cursor := " "
+				if i == m.queueCursor {
+					cursor = ">"
+				}
+				
+				// Get file name
+				fileName := url.String()
 				fileItem := findFileItemByURL(m.searchResults, url)
 				if fileItem != nil {
 					fileName = fileItem.name
-					fileSize = FormatSize(fileItem.size)
 				}
-
-				// Format the entry with file information instead of just URL
-				entry := fmt.Sprintf("%d. %s (%s)", i+1, fileName, fileSize)
-
-				// Highlight current cursor position
-				if i == m.queueCursor {
-					s.WriteString(highlightStyle.Render("> " + entry + "\n"))
-				} else {
-					s.WriteString("  " + entry + "\n")
-				}
+				
+				s.WriteString(fmt.Sprintf("%s %s\n", cursor, fileName))
 			}
 		}
-	}
 
-	// Footer with status and error messages
-	s.WriteString("\n\n")
-
-	// Display any error message
-	if m.error != "" {
-		s.WriteString(m.error)
-		s.WriteString("\n")
-	}
-
-	// Display status message
-	if m.status != "" {
-		s.WriteString(m.status)
-		s.WriteString("\n")
-	}
-
-	// Help text
-	s.WriteString("\n")
-	switch m.mode {
-	case ModeSearch:
-		s.WriteString("s: Search | tab: Switch Mode | q: Quit")
-	case ModeResults:
-		s.WriteString("Space: Select | Enter: Download | j/k: Move | h/l: Pages | f: Filter | q: Quit")
-	case ModeFilter:
-		s.WriteString("Esc: Exit Filter | q: Quit")
-	case ModeDownloading:
-		s.WriteString("j/k: Move | d: Remove | tab: Switch Mode | q: Quit")
+		// Status message
+		if m.status != "" {
+			s.WriteString("\n" + m.status + "\n")
+		}
+		
+		// Help text
+		s.WriteString("\nj/k: Navigate queue | d: Remove from queue | tab: Switch Mode | esc: Quit\n")
 	}
 
 	return s.String()
@@ -859,15 +850,13 @@ func downloadFile(url *xdcc.IRCFile, outputPath string) tea.Cmd {
 			}
 		}
 
-		// Create a command to listen to events
 		// Set up a listener in a goroutine
 		go func() {
 			evts := transfer.PollEvents()
 			for evt := range evts {
-				// Handle events with the appropriate tea.Msg
+				// Process events (e.g., log progress)
 				switch e := evt.(type) {
 				case xdcc.TransferProgessEvent:
-					// Use program.Send to send updates
 					fmt.Printf("Progress: %d bytes (%.2f KB/s)\n", e.TransferBytes, float64(e.TransferRate)/1024)
 				case xdcc.TransferStartedEvent:
 					fmt.Printf("Download started: %s (%.2f MB)\n", outputPath, float64(e.FileSize)/1024/1024)
@@ -878,9 +867,13 @@ func downloadFile(url *xdcc.IRCFile, outputPath string) tea.Cmd {
 				}
 			}
 		}()
-		
-		return downloadStartedMsg{file: filepath.Base(outputPath)}
+
+		// Return initial status with minimal info
+		return downloadProgressMsg{
+			bytesDownloaded: 0,
+			totalBytes:      0,
+			url:             url,
+			speed:           0,
+		}
 	}
 }
-
-// We've replaced the pollDownloadEvents with a direct goroutine in downloadFile

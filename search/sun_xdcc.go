@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 )
 
 const (
@@ -53,16 +52,10 @@ type SunXdccResponse struct {
 func (p *SunXdccProvider) Search(keywords []string) ([]XdccFileInfo, error) {
 	keywordString := strings.Join(keywords, " ")
 	searchkey := strings.Join(strings.Fields(keywordString), "+")
-	
-	// Create HTTP client with timeout
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-	}
-	
 	// see https://sunxdcc.com/#api for API definition
-	httpResp, err := client.Get(sunXdccURL + "?sterm=" + searchkey)
+	httpResp, err := http.Get(sunXdccURL + "?sterm=" + searchkey)
 	if err != nil {
-		return nil, fmt.Errorf("search request failed: %w", err)
+		return nil, err
 	}
 
 	defer httpResp.Body.Close()

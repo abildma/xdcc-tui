@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 	"xdcc-tui/xdcc"
 
 	"github.com/PuerkitoBio/goquery"
@@ -47,15 +46,9 @@ func (p *XdccEuProvider) parseFields(fields []string) (*XdccFileInfo, error) {
 func (p *XdccEuProvider) Search(keywords []string) ([]XdccFileInfo, error) {
 	keywordString := strings.Join(keywords, " ")
 	searchkey := strings.Join(strings.Fields(keywordString), "+")
-	
-	// Create HTTP client with timeout
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-	}
-	
-	res, err := client.Get(xdccEuURL + "?searchkey=" + searchkey)
+	res, err := http.Get(xdccEuURL + "?searchkey=" + searchkey)
 	if err != nil {
-		return nil, fmt.Errorf("search request failed: %w", err)
+		return nil, err
 	}
 
 	defer res.Body.Close()
