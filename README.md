@@ -23,7 +23,7 @@ This project provides a user-friendly terminal interface to search and download 
 Assuming you have the latest version of Go installed on your system, you can use the **make** command to build an executable:
 
 ```bash 
-git clone https://github.com/abildmna/xdcc-tui.git
+git clone https://github.com/abildma/xdcc-tui.git
 cd xdcc-tui
 make # this will output a bin/xdcc executable
 ```
