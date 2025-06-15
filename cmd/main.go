@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	tea "github.com/charmbracelet/bubbletea"
 	"os"
 	"strconv"
 	"strings"
@@ -13,9 +14,8 @@ import (
 	"xdcc-tui/pb"
 	"xdcc-tui/search"
 	table "xdcc-tui/table"
-	xdcc "xdcc-tui/xdcc"
 	tui "xdcc-tui/tui"
-	tea "github.com/charmbracelet/bubbletea"
+	xdcc "xdcc-tui/xdcc"
 )
 
 var searchEngine *search.ProviderAggregator
