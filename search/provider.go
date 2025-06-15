@@ -1,13 +1,9 @@
 //go:build ignore
 // +build ignore
 
-package tui
+package search
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/url"
-	"strings"
 	"xdcc-tui/xdcc"
 )
 
@@ -41,32 +37,5 @@ func (a *ProviderAggregator) Search(keywords []string) ([]SearchResult, error) {
 		}
 		results = append(results, providerResults...)
 	}
-	return results, nil
-}
-
-type XdccEuProvider struct{}
-
-func (p *XdccEuProvider) Search(keywords []string) ([]SearchResult, error) {
-	baseURL := "https://api.xdcc.eu/search.php"
-
-	// Build query
-	params := url.Values{}
-	params.Add("q", strings.Join(keywords, " "))
-
-	// Make request
-	resp, err := http.Get(baseURL + "?" + params.Encode())
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	// Parse response
-	var results []SearchResult
-	decoder := json.NewDecoder(resp.Body)
-	err = decoder.Decode(&results)
-	if err != nil {
-		return nil, err
-	}
-
 	return results, nil
 }
