@@ -6,7 +6,7 @@
  <meta name="google-site-verification" content="4Rjg8YnufgHBYdLu-gAUsmJasHk03XKYhUXtRMNZdsk" />
 -->
 
-# XDCC-CLI
+# XDCC-TUI
 
 A fast, keyboard-driven XTDC search & download tool for the terminal.
 
@@ -34,8 +34,8 @@ This project provides a user-friendly terminal interface to search and download 
 ### Quick run (no compile step)
 
 ```bash
-git clone https://github.com/abildma/xdcc-cli.git
-cd xdcc-cli
+git clone https://github.com/abildma/xdcc-tui.git
+cd xdcc-tui
 go run ./cmd            # launches the TUI immediately
 ```
 
