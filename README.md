@@ -5,8 +5,7 @@
 
  <meta name="google-site-verification" content="4Rjg8YnufgHBYdLu-gAUsmJasHk03XKYhUXtRMNZdsk" />
 -->
-fork from https://github.com/ostafen
-
+This is a fork of https://github.com/ostafen/xdcc-cli
 # XDCC-TUI
 
 A fast, keyboard-driven XTDC search & download tool for the terminal.
