@@ -1,10 +1,3 @@
-<!--
-  Title: xdcc-tui
-  Description: An interactive TUI tool for xdcc file search and retrieval.
-  Author: ostafen (original), ayeah (TUI version)
-
- <meta name="google-site-verification" content="4Rjg8YnufgHBYdLu-gAUsmJasHk03XKYhUXtRMNZdsk" />
--->
 This is a fork of https://github.com/ostafen/xdcc-cli
 # XDCC-TUI
 
