@@ -2,7 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -56,12 +58,14 @@ type downloadState struct {
 type Model struct {
 	// inputs
 	searchInput textinput.Model
+	filterInput textinput.Model
 
 	// data
-	results   []search.XdccFileInfo
-	cursor    int
-	selected  map[int]struct{}
-	downloads map[int]*downloadState
+	results         []search.XdccFileInfo
+	filteredResults []search.XdccFileInfo
+	cursor          int
+	selected        map[int]struct{}
+	downloads       map[int]*downloadState
 
 	page int
 
@@ -73,6 +77,7 @@ type Model struct {
 	busy   bool
 
 	searchDone bool
+	filterMode bool
 
 	currentView view
 }
@@ -93,6 +98,11 @@ func NewModel() Model {
 	ti.CharLimit = 256
 	ti.Width = 40
 
+	fi := textinput.New()
+	fi.Placeholder = "filter results (e.g., .mp4, >1GB)"
+	fi.CharLimit = 100
+	fi.Width = 40
+
 	aggr := search.NewProviderAggregator(
 		&search.XdccEuProvider{},
 		&search.SunXdccProvider{},
@@ -100,16 +110,122 @@ func NewModel() Model {
 
 	return Model{
 		searchInput: ti,
+		filterInput: fi,
 		selected:    make(map[int]struct{}),
 		downloads:   make(map[int]*downloadState),
 		aggregator:  aggr,
-		status:      "Enter keywords and press <enter> to search | Tab: switch view",
+		status:      "Enter keywords and press <enter> to search | Tab: switch view | /: filter",
 	}
 }
 
 // Init implements tea.Model
 func (m Model) Init() tea.Cmd {
 	return textinput.Blink
+}
+
+// getCurrentResults returns the current results slice (filtered or unfiltered)
+func (m *Model) getCurrentResults() []search.XdccFileInfo {
+	if m == nil {
+		return nil
+	}
+	if len(m.filteredResults) > 0 {
+		return m.filteredResults
+	}
+	return m.results
+}
+
+func (m *Model) applyFilter() {
+	filter := strings.TrimSpace(m.filterInput.Value())
+	if filter == "" {
+		m.filteredResults = nil
+		m.cursor = 0
+		m.page = 0
+		m.status = "Filter cleared"
+		return
+	}
+
+	var filtered []search.XdccFileInfo
+
+	// Check for size filters (e.g., >1GB, <500MB)
+	if filter[0] == '>' || filter[0] == '<' {
+		// Parse size filter
+		compareFunc := func(a, b int64) bool { return a > b }
+		if filter[0] == '<' {
+			compareFunc = func(a, b int64) bool { return a < b }
+		}
+
+		size, err := parseSizeFilter(strings.TrimSpace(filter[1:]))
+		if err == nil {
+			for _, r := range m.results {
+				if compareFunc(r.Size, size) {
+					filtered = append(filtered, r)
+				}
+			}
+		}
+	} else if strings.HasPrefix(filter, ".") {
+		// File extension filter
+		ext := strings.ToLower(filter)
+		for _, r := range m.results {
+			if strings.HasSuffix(strings.ToLower(r.Name), ext) {
+				filtered = append(filtered, r)
+			}
+		}
+	} else {
+		// Simple filename filter (case insensitive)
+		filterLower := strings.ToLower(filter)
+		for _, r := range m.results {
+			if strings.Contains(strings.ToLower(r.Name), filterLower) {
+				filtered = append(filtered, r)
+			}
+		}
+	}
+
+	m.filteredResults = filtered
+	m.cursor = 0
+	m.page = 0
+	m.status = fmt.Sprintf("Filter: %s (%d results)", filter, len(filtered))
+}
+
+func parseSizeFilter(s string) (int64, error) {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" {
+		return 0, fmt.Errorf("empty size")
+	}
+
+	// Find the numeric part
+	i := 0
+	for i < len(s) && (s[i] == '.' || s[i] >= '0' && s[i] <= '9') {
+		i++
+	}
+
+	if i == 0 {
+		return 0, fmt.Errorf("no number found")
+	}
+
+	// Parse the number
+	numberStr := s[:i]
+	size, err := strconv.ParseFloat(numberStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid number: %v", err)
+	}
+
+	// If there's no unit, assume bytes
+	if i >= len(s) {
+		return int64(size), nil
+	}
+
+	// Parse the unit
+	unit := strings.TrimSpace(s[i:])
+	switch {
+	case strings.HasPrefix(unit, "k"):
+		return int64(size * 1024), nil
+	case strings.HasPrefix(unit, "m"):
+		return int64(size * 1024 * 1024), nil
+	case strings.HasPrefix(unit, "g"):
+		return int64(size * 1024 * 1024 * 1024), nil
+	default:
+		return 0, fmt.Errorf("unknown unit: %s", unit)
+	}
 }
 
 // Update implements tea.Model
@@ -119,6 +235,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.busy {
 			// ignore key events while a search is running
 			return m, nil
+		}
+
+		if m.filterMode {
+			// Handle Enter key in filter mode
+			if msg.String() == "enter" {
+				m.filterMode = false
+				m.applyFilter()
+				return m, nil
+			}
+
+			switch msg.String() {
+			case "esc":
+				m.filterMode = false
+				m.filteredResults = nil
+				m.status = "Filter cleared"
+				m.cursor = 0
+				m.page = 0
+				return m, nil
+			case "backspace":
+				if m.filterInput.Value() == "" {
+					m.filterMode = false
+					m.filteredResults = nil
+					m.status = "Filter cleared"
+					return m, nil
+				}
+			}
+
+			// Don't process the '/' key in filter mode
+			if msg.String() == "/" {
+				return m, nil
+			}
+
+			var cmd tea.Cmd
+			m.filterInput, cmd = m.filterInput.Update(msg)
+			m.applyFilter()
+			return m, cmd
 		}
 
 		switch msg.String() {
@@ -139,6 +291,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.status = "please type something to search"
 					return m, nil
 				}
+				m.searchDone = true
+				m.results = nil
+				m.filteredResults = nil
+				m.cursor = 0
+				m.page = 0
 				m.busy = true
 				m.status = "searching…"
 				return m, tea.Batch(runSearchCmd(m.aggregator, strings.Split(query, " ")), textinput.Blink)
@@ -167,27 +324,57 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.page = m.cursor / pageSize
 			}
+		case "/":
+			if m.currentView == viewSearch && m.searchDone && !m.filterMode {
+				m.filterMode = true
+				// Clear any existing filter text when starting a new filter
+				m.filterInput.Reset()
+				m.filterInput.Focus()
+				m.status = "Filter: " + m.filterInput.Value()
+				// Return here to prevent the '/' from being added to the input
+				return m, nil
+			}
+		case "esc":
+			if m.filterMode {
+				m.filterMode = false
+				m.status = "Filter cleared | " + m.status
+				m.applyFilter()
+			} else if m.searchDone {
+				// Return to search input
+				m.searchDone = false
+				m.searchInput.Reset()
+				m.searchInput.Focus()
+				m.status = "Enter search query"
+				m.results = nil
+				m.filteredResults = nil
+				m.cursor = 0
+				m.page = 0
+			}
 		case "up", "k":
-			if m.currentView != viewSearch {
+			if m.currentView != viewSearch || m.filterMode {
 				break
 			}
-			if len(m.results) == 0 {
-				break
-			}
-			if m.cursor > 0 {
-				m.cursor--
-			}
-			if m.cursor < m.page*pageSize {
-				m.page--
+			if m.searchDone {
+				results := m.getCurrentResults()
+				if len(results) == 0 {
+					break
+				}
+				if m.cursor > 0 {
+					m.cursor--
+				}
+				if m.cursor < m.page*pageSize {
+					m.page--
+				}
 			}
 		case "down", "j":
-			if m.currentView != viewSearch {
+			if m.currentView != viewSearch || m.filterMode {
 				break
 			}
-			if len(m.results) == 0 {
+			results := m.getCurrentResults()
+			if len(results) == 0 {
 				break
 			}
-			if m.cursor < len(m.results)-1 {
+			if m.cursor < len(results)-1 {
 				m.cursor++
 			}
 			if m.cursor >= (m.page+1)*pageSize {
@@ -228,9 +415,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return msg.results[i].Size > msg.results[j].Size
 		})
 		m.results = msg.results
+		m.filteredResults = nil
 		m.cursor = 0
+		m.page = 0
 		m.selected = make(map[int]struct{})
-		m.status = fmt.Sprintf("found %d results", len(msg.results))
+		m.status = fmt.Sprintf("found %d results | / to filter", len(msg.results))
 	case downloadEventMsg:
 		if msg.err != nil {
 			m.status = fmt.Sprintf("download error: %v", msg.err)
@@ -267,18 +456,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// let textinput update regardless of state so user can type again after search
 	var cmd tea.Cmd
-	m.searchInput, cmd = m.searchInput.Update(msg)
+	if m.filterMode {
+		m.filterInput, cmd = m.filterInput.Update(msg)
+	} else {
+		m.searchInput, cmd = m.searchInput.Update(msg)
+	}
 	return m, cmd
 }
 
 // indicesToDownload returns selected indices or current cursor if none selected
 func (m Model) indicesToDownload() []int {
-	if len(m.results) == 0 {
+	results := m.getCurrentResults()
+	if len(results) == 0 {
 		return nil
 	}
 	indices := make([]int, 0)
 	if len(m.selected) == 0 {
-		indices = append(indices, m.cursor)
+		// If we're in filtered view, we need to map the filtered index back to the original results
+		if len(m.filteredResults) > 0 && m.cursor < len(m.filteredResults) {
+			// Find the index of the current filtered result in the original results
+			for i, r := range m.results {
+				if r.Name == m.filteredResults[m.cursor].Name && r.Size == m.filteredResults[m.cursor].Size {
+					indices = append(indices, i)
+					break
+				}
+			}
+		} else if m.cursor < len(m.results) {
+			indices = append(indices, m.cursor)
+		}
 	} else {
 		for idx := range m.selected {
 			indices = append(indices, idx)
@@ -303,7 +508,7 @@ func (m *Model) startDownloads(indices []int) tea.Cmd {
 	cmds := make([]tea.Cmd, 0, len(indices))
 	for _, idx := range indices {
 		file := m.results[idx]
-		transfer := xdcc.NewTransfer(xdcc.Config{File: file.URL, OutPath: GetDownloadsDir()})
+		transfer := xdcc.NewTransfer(xdcc.Config{File: file.URL})
 		// start connection (blocking until IRC connect attempt returns)
 		if err := transfer.Start(); err != nil {
 			cmds = append(cmds, func() tea.Msg { return downloadEventMsg{index: idx, err: err} })
@@ -314,30 +519,60 @@ func (m *Model) startDownloads(indices []int) tea.Cmd {
 		cmds = append(cmds, pollDownloadCmd(idx, ch))
 	}
 	m.status = fmt.Sprintf("started %d download(s)", len(indices))
+
 	return tea.Batch(cmds...)
 }
 
 // View implements tea.Model
 func (m Model) View() string {
+	// Show filter input when in filter mode
+	if m.filterMode {
+		return fmt.Sprintf(
+			"Filter: %s\n\n%s",
+			m.filterInput.View(),
+			"(esc to cancel, enter to apply | e.g., .mp4, >1GB, <500MB)",
+		)
+	}
+
 	var b strings.Builder
+
+	// Show search input when no search has been performed yet
+	if !m.searchDone {
+		return fmt.Sprintf(
+			"%s\n\n%s\n\n%s",
+			titleStyle.Render("XDCC-TUI"),
+			m.searchInput.View(),
+			"(press Enter to search, Esc to exit)",
+		)
+	}
 
 	b.WriteString(titleStyle.Render("XDCC-TUI") + "\n\n")
 	if m.currentView == viewSearch {
 		b.WriteString(m.searchInput.View() + "\n\n")
-	}
 
-	if m.currentView == viewSearch {
+		// Get the current results (filtered or unfiltered)
+		results := m.getCurrentResults()
+
 		// header
-		b.WriteString(headerStyle.Render(fmt.Sprintf("Page %d | %-2s %-3s %-40s %8s %s", m.page+1, "", "", "Name", "Size", "Pack")) + "\n")
+		b.WriteString(headerStyle.Render(fmt.Sprintf("Page %d/%d | %-2s %-3s %-40s %8s %s",
+			m.page+1,
+			(len(results)+pageSize-1)/pageSize, // total pages
+			"", "", "Name", "Size", "Pack")) + "\n")
 
 		// results list
 		start := m.page * pageSize
 		end := start + pageSize
-		if end > len(m.results) {
-			end = len(m.results)
+		if end > len(results) {
+			end = len(results)
 		}
+
+		// Show message if no results
+		if len(results) == 0 {
+			b.WriteString("\n  No results found")
+		}
+
 		for i := start; i < end; i++ {
-			res := m.results[i]
+			res := results[i]
 
 			cursor := "  "
 			if i == m.cursor {
@@ -350,7 +585,29 @@ func (m Model) View() string {
 				sel = "[ ] "
 			}
 			sizeStr := FormatSize(res.Size)
-			line := fmt.Sprintf("%s%s%-40.40s %8s %s", cursor, sel, res.Name, sizeStr, res.URL.String())
+			ext := filepath.Ext(res.Name)
+			nameWithoutExt := strings.TrimSuffix(res.Name, ext)
+			var nameDisplay string
+			if m.filterInput.Value() != "" && strings.HasPrefix(m.filterInput.Value(), ".") {
+				nameDisplay = fmt.Sprintf("%s%s",
+					nameWithoutExt,
+					lipgloss.NewStyle().Foreground(lipgloss.Color("#FFD700")).Render(ext))
+			} else {
+				nameDisplay = res.Name
+			}
+
+			// Show a simple server identifier
+			serverInfo := ""
+			if len(results) > 0 {
+				serverInfo = fmt.Sprintf("Server %d", res.Slot%10) // Simple hash-like identifier
+			}
+
+			fileInfo := fmt.Sprintf("%s (%s) - %s",
+				nameDisplay,
+				FormatSize(res.Size),
+				serverInfo,
+			)
+			line := fmt.Sprintf("%s%s%-40.40s %8s %s", cursor, sel, fileInfo, sizeStr, res.URL.String())
 			// alternating row style for readability
 			if i%2 == 0 {
 				line = rowEvenStyle.Render(line)
