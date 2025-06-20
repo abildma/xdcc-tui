@@ -1,4 +1,3 @@
-
 bin/xdcc-tui: ./**/*.go
 	go build -o bin/xdcc-tui cmd/main.go
 
