@@ -1,0 +1,58 @@
+# Binaries
+bin/
+xdcc
+
+# Dependency directories
+vendor/
+
+# Build output
+/dist
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Git
+.git
+.gitignore
+.gitmodules
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs and databases
+*.log
+*.sql
+*.sqlite
+
+# Test files
+*_test.go
+
+# Local development files
+.env
+.env.*
+!.env.example
+
+# Build cache
+/go/pkg/
+/go/bin/
+
+# Ignore everything in the root directory except specific files
+/*
+!/go.mod
+!/go.sum
+!/cmd/
+!/pb/
+!/search/
+!/table/
+!/tui/
+!/util/
+!/xdcc/
